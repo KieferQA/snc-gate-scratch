@@ -1,0 +1,75 @@
+name: CI
+
+# Scratch copy of SNC ci.yml at aa83a656: triggers, concurrency, job ids, needs and ifs as there;
+# job bodies stubbed. `check` fails on main while the repo variable FORCE_FAIL is true. ci_gate is
+# appended verbatim from SNC.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main, demo, staging, qa, prod]
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    if: github.event.pull_request.draft != true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Stub check (red on main while FORCE_FAIL is true)
+        env:
+          FORCE: ${{ vars.FORCE_FAIL }}
+          BASE: ${{ github.base_ref }}
+        run: |
+          echo "base=$BASE force=$FORCE"
+          if [ "$BASE" = main ] && [ "$FORCE" = true ]; then exit 1; fi
+  workflow_questions:
+    needs: changes
+    if: ${{ !cancelled() && github.event.pull_request.draft != true && (needs.changes.result != 'success' || needs.changes.outputs.workflow_suite != 'false') }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo stub
+  changes:
+    if: github.event.pull_request.draft != true
+    runs-on: ubuntu-latest
+    outputs:
+      docs_only: "false"
+      workflow_suite: "true"
+    steps:
+      - run: echo stub
+  rls_negative_control:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' && github.event.pull_request.draft != true }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo stub
+  browser_suites:
+    name: browser_suites (sb-1)
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' && github.event.pull_request.draft != true && (github.event_name != 'pull_request' || github.base_ref == 'main' || github.base_ref == 'demo' || github.base_ref == 'staging' || github.base_ref == 'qa' || github.base_ref == 'prod') }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "shard ran on base ${{ github.base_ref }}"
+  ci_gate:
+    name: ci_gate (${{ github.base_ref || github.ref_name }})
+    needs: [check, changes, workflow_questions, rls_negative_control, browser_suites]
+    # always(): the gate reports on every outcome, red included; a gate skipped behind a red job
+    # would report as passing.
+    if: ${{ always() && github.event.pull_request.draft != true }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every job passed or was skipped by its own rule
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "job results: $RESULTS"
+          case " $RESULTS " in
+            *" failure "* | *" cancelled "*) exit 1 ;;
+          esac

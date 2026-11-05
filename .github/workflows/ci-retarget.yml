@@ -1,0 +1,38 @@
+name: CI on a new base
+
+on:
+  pull_request:
+    # Changing a pull request's base fires `edited`, and so does every title and body edit. ci.yml
+    # does not listen to it: there an edit's run would skip `check`, and a skipped check passes the
+    # rule a red one failed. Here an edit that leaves the base alone skips both jobs below, and
+    # neither skipped job is named `ci_gate (main)`, the check main's ruleset requires
+    # (docs/briefs/2026-11-02-ci-browser-suites-off-main.md D4).
+    types: [edited]
+
+permissions:
+  contents: read
+
+jobs:
+  new_base:
+    # A stacked pull request is retargeted to main when its base merges. Its last run was against the
+    # old base and skipped the browser shards, so all of ci.yml runs again on the new base, and a
+    # stack cannot reach main on a run that never drove the browser.
+    if: github.event.changes.base.ref.from && github.event.pull_request.draft != true
+    uses: ./.github/workflows/ci.yml
+  ci_gate:
+    # The call's checks are named `new_base / <job>`, which no rule requires, so this job carries
+    # its verdict under the required name. It is `ci_gate (<new base>)` only on a base change and
+    # `ci_gate (no base change)` otherwise, so a title edit cannot replace a red gate on main.
+    name: ci_gate (${{ github.event.changes.base.ref.from && github.event.pull_request.draft != true && github.base_ref || 'no base change' }})
+    needs: new_base
+    # always(): a red or cancelled call still reports, red; a skipped gate would report as passing.
+    if: ${{ always() && github.event.changes.base.ref.from && github.event.pull_request.draft != true }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: All of ci.yml passed on the new base
+        env:
+          RESULT: ${{ needs.new_base.result }}
+        run: |
+          echo "ci.yml on the new base: $RESULT"
+          test "$RESULT" = success
